@@ -8,13 +8,13 @@ Gesture-controlled virtual chess using:
 
 Controls
 --------
-Right hand:
-    Index finger       -> hover a square
-    Thumb + index pinch -> select a piece
-    Move while pinched -> drag selected piece
-    Release pinch      -> attempt the move
-
 Left hand:
+    Index finger        -> hover a square
+    Thumb + index pinch -> pick up a piece
+    Move while pinched  -> drag selected piece
+    Release pinch       -> drop the piece
+
+Right hand:
     Open palm + movement -> orbit the board
     Fist                 -> freeze board view
 
@@ -49,6 +49,16 @@ from dotenv import load_dotenv
 
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
+
+# MediaPipe hand connection layout is stable across package variants. Keep a
+# direct definition to avoid import-path differences between builds.
+HAND_CONNECTIONS = [
+    (0, 1), (1, 2), (2, 3), (3, 4),
+    (5, 6), (6, 7), (7, 8),
+    (9, 10), (10, 11), (11, 12), (12, 13), (13, 14),
+    (15, 16), (16, 17), (17, 18), (18, 19), (19, 20),
+    (0, 5), (5, 9), (9, 13), (13, 17), (0, 17),
+]
 
 
 # ============================================================
@@ -1209,7 +1219,7 @@ class HandTracker:
 
         return float(np.hypot(ax - bx, ay - by))
 
-    def is_pinch(self, landmarks):
+    def is_pinch(self, landmarks, already_active=False):
         if landmarks is None:
             return False
 
@@ -1233,10 +1243,9 @@ class HandTracker:
             index,
         )
 
-        return (
-            pinch_distance / palm_size
-            < PINCH_ON
-        )
+        threshold = PINCH_OFF if already_active else PINCH_ON
+
+        return pinch_distance / palm_size < threshold
 
     def process(self, frame):
         rgb = cv2.cvtColor(
@@ -1257,6 +1266,7 @@ class HandTracker:
         )
 
         self.right_index = None
+        self.left_index = None
         self.left_wrist = None
         self.right_landmarks = None
         self.left_landmarks = None
@@ -1287,7 +1297,13 @@ class HandTracker:
             elif handedness.lower() == "left":
                 self.left_landmarks = landmarks
 
+                tip = landmarks[8]
                 wrist = landmarks[0]
+
+                self.left_index = (
+                    int(tip.x * frame.shape[1]),
+                    int(tip.y * frame.shape[0]),
+                )
 
                 self.left_wrist = (
                     int(wrist.x * frame.shape[1]),
@@ -1811,7 +1827,7 @@ def draw_hand_landmarks(frame, landmarks, color=(60, 200, 255), radius=3):
     panel = np.zeros((panel_h, panel_w, 3), dtype=np.uint8)
     panel[:] = (20, 20, 20)
 
-    for connection in mp.solutions.hands.HAND_CONNECTIONS:
+    for connection in HAND_CONNECTIONS:
         p1 = landmarks[connection[0]]
         p2 = landmarks[connection[1]]
 
@@ -1946,12 +1962,12 @@ def draw_hud(
 
     # Gesture status
 
-    right_status = "RIGHT: CURSOR"
+    left_status = "LEFT: PICK UP / DROP"
 
-    left_status = (
-        "LEFT: OPTIONAL ROTATE"
+    right_status = (
+        "RIGHT: OPTIONAL ROTATE"
         if orbit.active
-        else "LEFT: IDLE"
+        else "RIGHT: IDLE"
     )
 
     cv2.putText(
@@ -1979,10 +1995,10 @@ def draw_hud(
     # Controls
 
     controls = [
-        "Right index: cursor",
-        "Pinch once: select",
-        "Move + pinch again: place",
-        "Left hand: optional rotate",
+        "Left thumb + index: pick up",
+        "Move to target and release: drop",
+        "White is at the bottom",
+        "Black is the computer opponent",
         "R reset   U undo   F flip",
         "ESC / Q quit",
     ]
@@ -2252,15 +2268,14 @@ def main():
     print("Model:", MODEL_PATH)
     print()
     print("Controls:")
-    print("  Right index       -> hover")
-    print("  Pinch             -> select")
-    print("  Pinch + move      -> drag")
-    print("  Release           -> move")
-    print("  Left open palm    -> orbit")
-    print("  R                 -> reset")
-    print("  U                 -> undo")
-    print("  F                 -> flip board")
-    print("  Q / ESC           -> quit")
+    print("  Left thumb + index -> pick up a piece")
+    print("  Move and release   -> drop it on target")
+    print("  White at bottom    -> your side")
+    print("  Black is computer  -> opponent")
+    print("  R                  -> reset")
+    print("  U                  -> undo")
+    print("  F                  -> flip board")
+    print("  Q / ESC            -> quit")
     print("=" * 60)
 
     if not os.path.exists(MODEL_PATH):
@@ -2348,25 +2363,27 @@ def main():
             tracker.process(frame)
 
             controller.update_fingertip(
-                tracker.right_index
+                tracker.left_index
             )
 
             controller.update_hover(
                 board_flipped
             )
 
-            right_pinch = tracker.is_pinch(
-                tracker.right_landmarks
+            left_pinch = tracker.is_pinch(
+                tracker.left_landmarks,
+                controller.pinch_active,
             )
 
             controller.pinch_update(
-                right_pinch,
+                left_pinch,
                 board_flipped,
             )
 
-            # Left hand orbit
+            # Optional right-hand orbit remains available, but the player uses
+            # the left hand for piece pickup/drop.
             orbit.update(
-                tracker.left_landmarks
+                tracker.right_landmarks
             )
 
             # ------------------------------------------------
@@ -2443,14 +2460,14 @@ def main():
 
             draw_hand_landmarks(
                 frame,
-                tracker.right_landmarks,
-                (60, 200, 255),
+                tracker.left_landmarks,
+                (130, 255, 130),
                 4,
             )
             draw_hand_landmarks(
                 frame,
-                tracker.left_landmarks,
-                (130, 255, 130),
+                tracker.right_landmarks,
+                (60, 200, 255),
                 4,
             )
 
