@@ -20,6 +20,12 @@ def test_human_white_move_advances_turn_and_automatically_resolves_black_respons
 
     ok = controller.attempt_move(chess.E2, chess.E4)
 
+    expected_board = chess.Board()
+    expected_board.push(chess.Move.from_uci("e2e4"))
+
     assert ok is True
     assert board.turn == chess.WHITE
-    assert controller.last_move in {"e4", "Nf3", "c4", "f3", "g3", "c3", "b4"}
+    assert controller.last_move is not None
+    assert controller.last_move in {
+        expected_board.san(move) for move in expected_board.legal_moves
+    }
