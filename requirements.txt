@@ -2,3 +2,4 @@ numpy>=1.24
 opencv-python>=4.9
 mediapipe>=0.10.9
 python-dotenv>=1.0
+python-chess>=1.11
