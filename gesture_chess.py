@@ -1275,6 +1275,75 @@ class GestureChessController:
         self.promotion_choice = chess.QUEEN
 
         self.last_action_time = 0.0
+        self.computer_thinking = False
+
+    def _choose_black_move(self):
+        if self.board.turn != chess.BLACK:
+            return None
+
+        legal_moves = list(self.board.legal_moves)
+        if not legal_moves:
+            return None
+
+        best_move = legal_moves[0]
+        best_score = -float("inf")
+
+        for move in legal_moves:
+            self.board.push(move)
+            score = self._evaluate_position(1, False)
+            self.board.pop()
+
+            if score > best_score:
+                best_score = score
+                best_move = move
+
+        return best_move
+
+    def _evaluate_position(self, depth, is_black_turn):
+        legal_moves = list(self.board.legal_moves)
+        if depth == 0 or not legal_moves:
+            return self._board_score()
+
+        if is_black_turn:
+            best = float("inf")
+            for move in legal_moves:
+                self.board.push(move)
+                score = self._evaluate_position(depth - 1, False)
+                self.board.pop()
+                best = min(best, score)
+            return best
+
+        best = -float("inf")
+        for move in legal_moves:
+            self.board.push(move)
+            score = self._evaluate_position(depth - 1, True)
+            self.board.pop()
+            best = max(best, score)
+        return best
+
+    def _board_score(self):
+        score = 0
+        for square, piece in self.board.piece_map().items():
+            value = {
+                chess.PAWN: 100,
+                chess.KNIGHT: 320,
+                chess.BISHOP: 330,
+                chess.ROOK: 500,
+                chess.QUEEN: 900,
+                chess.KING: 20000,
+            }.get(piece.piece_type, 0)
+
+            if piece.color == chess.WHITE:
+                score += value
+            else:
+                score -= value
+
+        return score
+
+    def choose_computer_move(self):
+        if self.board.turn != chess.BLACK:
+            return None
+        return self._choose_black_move()
 
     def update_fingertip(self, point):
         if point is None:
@@ -1334,7 +1403,6 @@ class GestureChessController:
             ):
                 self.pinch_active = True
                 self.pinch_started = True
-
                 self.on_pinch_start()
 
         else:
@@ -1348,14 +1416,15 @@ class GestureChessController:
             ):
                 self.pinch_active = False
                 self.pinch_started = False
-
-                self.on_pinch_release(
-                    board_flipped
-                )
+                self.on_pinch_release(board_flipped)
 
     def on_pinch_start(self):
+        if self.board.turn != chess.WHITE:
+            self.status = "COMPUTER THINKING..."
+            return
+
         if self.hover_square is None:
-            self.status = "PINCH: AIM AT A PIECE"
+            self.status = "POINT AT A PIECE"
             return
 
         piece = self.board.piece_at(
@@ -1371,7 +1440,6 @@ class GestureChessController:
             return
 
         self.selected_square = self.hover_square
-
         self.status = (
             f"SELECTED {chess.square_name(self.selected_square)}"
         )
@@ -1396,11 +1464,39 @@ class GestureChessController:
             target,
         )
 
+    def _play_computer_move(self):
+        if self.board.turn != chess.BLACK or self.board.is_game_over():
+            return False
+
+        move = self.choose_computer_move()
+        if move is None:
+            self.status = "NO LEGAL MOVE"
+            return False
+
+        san = self.board.san(move)
+        self.board.push(move)
+        self.last_move = san
+
+        if self.board.is_checkmate():
+            self.status = "CHECKMATE"
+        elif self.board.is_stalemate():
+            self.status = "STALEMATE"
+        elif self.board.is_check():
+            self.status = f"COMPUTER CHECK: {san}"
+        else:
+            self.status = f"COMPUTER: {san}"
+
+        return True
+
     def attempt_move(
         self,
         from_square,
         to_square,
     ):
+        if self.board.turn != chess.WHITE:
+            self.status = "COMPUTER THINKING..."
+            return False
+
         piece = self.board.piece_at(
             from_square
         )
@@ -1410,12 +1506,7 @@ class GestureChessController:
             self.selected_square = None
             return False
 
-        # ----------------------------------------------------
-        # Promotion
-        # ----------------------------------------------------
-
         promotion = None
-
         if (
             piece.piece_type == chess.PAWN
             and chess.square_rank(to_square)
@@ -1430,19 +1521,15 @@ class GestureChessController:
         )
 
         if move not in self.board.legal_moves:
-
-            # If promotion is required, choose queen.
             if (
                 piece.piece_type == chess.PAWN
                 and chess.square_rank(to_square)
                 in (0, 7)
             ):
-                promotion = self.promotion_choice
-
                 move = chess.Move(
                     from_square,
                     to_square,
-                    promotion=promotion,
+                    promotion=self.promotion_choice,
                 )
 
             if move not in self.board.legal_moves:
@@ -1451,25 +1538,27 @@ class GestureChessController:
                 return False
 
         san = self.board.san(move)
-
         self.board.push(move)
-
         self.last_move = san
-
         self.selected_square = None
+        self.last_action_time = time.time()
 
         if self.board.is_checkmate():
             self.status = "CHECKMATE"
-        elif self.board.is_stalemate():
-            self.status = "STALEMATE"
-        elif self.board.is_check():
-            self.status = "CHECK"
-        else:
-            self.status = (
-                f"MOVED {san}"
-            )
+            return True
 
-        self.last_action_time = time.time()
+        if self.board.is_stalemate():
+            self.status = "STALEMATE"
+            return True
+
+        if self.board.is_check():
+            self.status = f"CHECK: {san}"
+        else:
+            self.status = f"MOVED {san}"
+
+        if self.board.turn == chess.BLACK:
+            self.status = "COMPUTER THINKING..."
+            self._play_computer_move()
 
         return True
 
@@ -1689,14 +1778,10 @@ def draw_hud(
 
     # Gesture status
 
-    right_status = (
-        "RIGHT: PINCH"
-        if controller.pinch_active
-        else "RIGHT: POINT"
-    )
+    right_status = "RIGHT: CURSOR"
 
     left_status = (
-        "LEFT: ORBIT"
+        "LEFT: OPTIONAL ROTATE"
         if orbit.active
         else "LEFT: IDLE"
     )
@@ -1726,10 +1811,10 @@ def draw_hud(
     # Controls
 
     controls = [
-        "Right index: hover",
-        "Pinch: select / drag",
-        "Release: move",
-        "Left open palm: orbit",
+        "Right index: cursor",
+        "Pinch once: select",
+        "Move + pinch again: place",
+        "Left hand: optional rotate",
         "R reset   U undo   F flip",
         "ESC / Q quit",
     ]

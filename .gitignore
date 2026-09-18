@@ -19,3 +19,6 @@ env/
 # Footage that sometimes lands in the working dir while filming
 *.mp4
 *.mov
+__pycache__/
+*.pyc
+.venv/
