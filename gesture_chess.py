@@ -82,8 +82,8 @@ BOARD_Z = 0.0
 BOARD_THICKNESS = 0.35
 
 # Camera / projection
-CX = 640
-CY = 330
+CX = 650
+CY = 390
 FOCAL = 72.0
 
 # Default board orientation
@@ -124,8 +124,8 @@ BLACK = (20, 20, 20)
 GRAY = (150, 150, 150)
 DARK_GRAY = (45, 45, 45)
 
-BOARD_LIGHT = (225, 205, 170)
-BOARD_DARK = (95, 65, 42)
+BOARD_LIGHT = (238, 218, 187)
+BOARD_DARK = (116, 81, 53)
 
 GREEN = (60, 220, 100)
 BLUE = (80, 180, 255)
@@ -277,7 +277,53 @@ def draw_board(frame, board_flipped=False):
 
     square_polygons = {}
 
-    # Board thickness / side walls
+    # Board thickness / side walls and premium frame
+    board_shadow = [
+        (-BOARD_SIZE / 2 - 0.25, -BOARD_SIZE / 2 - 0.28, BOARD_Z - 0.10),
+        (BOARD_SIZE / 2 + 0.25, -BOARD_SIZE / 2 - 0.28, BOARD_Z - 0.10),
+        (BOARD_SIZE / 2 + 0.30, BOARD_SIZE / 2 + 0.32, BOARD_Z - 0.10),
+        (-BOARD_SIZE / 2 - 0.30, BOARD_SIZE / 2 + 0.32, BOARD_Z - 0.10),
+    ]
+
+    shadow_screen = project_points(
+        [transform_point(p) for p in board_shadow]
+    )
+
+    shadow_overlay = frame.copy()
+    draw_polygon(
+        shadow_overlay,
+        shadow_screen,
+        (18, 15, 12),
+        None,
+        1,
+    )
+    cv2.addWeighted(
+        shadow_overlay,
+        0.30,
+        frame,
+        0.70,
+        0,
+        frame,
+    )
+
+    frame_corners = [
+        (-BOARD_SIZE / 2 - 0.35, -BOARD_SIZE / 2 - 0.35, BOARD_Z + 0.02),
+        (BOARD_SIZE / 2 + 0.35, -BOARD_SIZE / 2 - 0.35, BOARD_Z + 0.02),
+        (BOARD_SIZE / 2 + 0.35, BOARD_SIZE / 2 + 0.35, BOARD_Z + 0.02),
+        (-BOARD_SIZE / 2 - 0.35, BOARD_SIZE / 2 + 0.35, BOARD_Z + 0.02),
+    ]
+
+    frame_screen = project_points(
+        [transform_point(p) for p in frame_corners]
+    )
+
+    draw_polygon(
+        frame,
+        frame_screen,
+        (91, 73, 58),
+        (144, 112, 78),
+        6,
+    )
 
     top_corners = [
         (-BOARD_SIZE / 2, -BOARD_SIZE / 2, BOARD_Z),
@@ -352,6 +398,16 @@ def draw_board(frame, board_flipped=False):
         (65, 45, 32),
         BLACK,
         2,
+    )
+
+    board_outline = np.asarray(top_screen, dtype=np.int32)
+    cv2.polylines(
+        frame,
+        [board_outline],
+        True,
+        (85, 72, 62),
+        4,
+        cv2.LINE_AA,
     )
 
     # Squares
@@ -1683,8 +1739,96 @@ class OrbitController:
 
 
 # ============================================================
-# HUD
+# Score / hints / hand map
 # ============================================================
+
+PIECE_VALUES = {
+    chess.PAWN: 100,
+    chess.KNIGHT: 320,
+    chess.BISHOP: 330,
+    chess.ROOK: 500,
+    chess.QUEEN: 900,
+    chess.KING: 20000,
+}
+
+
+def board_material_score(board):
+    white_score = 0
+    black_score = 0
+
+    for piece in board.piece_map().values():
+        value = PIECE_VALUES.get(piece.piece_type, 0)
+        if piece.color == chess.WHITE:
+            white_score += value
+        else:
+            black_score += value
+
+    return white_score, black_score
+
+
+def build_hint(board):
+    if board.is_game_over():
+        return "Hint: game is over."
+
+    legal_moves = list(board.legal_moves)
+    if not legal_moves:
+        return "Hint: no legal moves remain."
+
+    move = legal_moves[0]
+    try:
+        san = board.san(move)
+    except ValueError:
+        san = move.uci()
+
+    return f"Hint: {move.uci()} ({san})"
+
+
+def draw_hand_landmarks(frame, landmarks, color=(60, 200, 255), radius=3):
+    if landmarks is None:
+        return
+
+    panel_w = 210
+    panel_h = 150
+    pad = 18
+    x0 = frame.shape[1] - panel_w - pad
+    y0 = frame.shape[0] - panel_h - pad
+
+    cv2.rectangle(
+        frame,
+        (x0, y0),
+        (x0 + panel_w, y0 + panel_h),
+        (18, 18, 18),
+        -1,
+    )
+    cv2.rectangle(
+        frame,
+        (x0, y0),
+        (x0 + panel_w, y0 + panel_h),
+        (120, 120, 120),
+        1,
+    )
+
+    panel = np.zeros((panel_h, panel_w, 3), dtype=np.uint8)
+    panel[:] = (20, 20, 20)
+
+    for connection in mp.solutions.hands.HAND_CONNECTIONS:
+        p1 = landmarks[connection[0]]
+        p2 = landmarks[connection[1]]
+
+        x1 = int(p1.x * panel_w)
+        y1 = int(p1.y * panel_h)
+        x2 = int(p2.x * panel_w)
+        y2 = int(p2.y * panel_h)
+
+        cv2.line(panel, (x1, y1), (x2, y2), color, 1, cv2.LINE_AA)
+
+    for landmark in landmarks:
+        x = int(landmark.x * panel_w)
+        y = int(landmark.y * panel_h)
+        cv2.circle(panel, (x, y), radius, color, -1, cv2.LINE_AA)
+
+    frame[y0:y0 + panel_h, x0:x0 + panel_w] = panel
+
 
 def draw_hud(
     frame,
@@ -1713,7 +1857,7 @@ def draw_hud(
     cv2.rectangle(
         frame,
         (20, 18),
-        (450, 155),
+        (490, 185),
         (15, 15, 15),
         -1,
     )
@@ -1721,7 +1865,7 @@ def draw_hud(
     cv2.rectangle(
         frame,
         (20, 18),
-        (450, 155),
+        (490, 185),
         (100, 100, 100),
         1,
     )
@@ -1759,6 +1903,30 @@ def draw_hud(
         cv2.LINE_AA,
     )
 
+    white_score, black_score = board_material_score(board)
+    cv2.putText(
+        frame,
+        f"You: {white_score}   Computer: {black_score}",
+        (35, 130),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.48,
+        GREEN if board.turn == chess.WHITE else YELLOW,
+        1,
+        cv2.LINE_AA,
+    )
+
+    hint = build_hint(board)
+    cv2.putText(
+        frame,
+        hint,
+        (35, 150),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.42,
+        GRAY,
+        1,
+        cv2.LINE_AA,
+    )
+
     last_move = (
         controller.last_move
         if controller.last_move
@@ -1768,9 +1936,9 @@ def draw_hud(
     cv2.putText(
         frame,
         f"Last move: {last_move}",
-        (35, 130),
+        (35, 170),
         cv2.FONT_HERSHEY_SIMPLEX,
-        0.48,
+        0.42,
         GRAY,
         1,
         cv2.LINE_AA,
@@ -1891,18 +2059,19 @@ def draw_highlights(
 
         overlay = frame.copy()
 
+        highlight_fill = (120, 230, 255)
         draw_polygon(
             overlay,
             screen,
-            (70, 210, 255),
+            highlight_fill,
             None,
         )
 
         cv2.addWeighted(
             overlay,
-            0.25,
+            0.35,
             frame,
-            0.75,
+            0.65,
             0,
             frame,
         )
@@ -1916,8 +2085,8 @@ def draw_highlights(
                 )
             ],
             True,
-            YELLOW,
-            3,
+            (255, 255, 102),
+            4,
             cv2.LINE_AA,
         )
 
@@ -2270,6 +2439,19 @@ def main():
                 board,
                 controller.selected_square,
                 board_flipped,
+            )
+
+            draw_hand_landmarks(
+                frame,
+                tracker.right_landmarks,
+                (60, 200, 255),
+                4,
+            )
+            draw_hand_landmarks(
+                frame,
+                tracker.left_landmarks,
+                (130, 255, 130),
+                4,
             )
 
             draw_gesture_overlay(

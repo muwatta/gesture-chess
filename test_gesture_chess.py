@@ -1,6 +1,24 @@
 import chess
 
-from gesture_chess import GestureChessController
+from gesture_chess import GestureChessController, board_material_score, build_hint
+
+
+def test_material_score_reflects_player_and_computer_materials():
+    board = chess.Board("8/8/8/8/8/8/8/K7 w - - 0 1")
+
+    white_score, black_score = board_material_score(board)
+
+    assert white_score > black_score
+    assert black_score == 0
+
+
+def test_build_hint_returns_a_real_white_move_hint():
+    board = chess.Board()
+
+    hint = build_hint(board)
+
+    assert isinstance(hint, str)
+    assert "Hint" in hint
 
 
 def test_computer_move_is_legal_for_black_turn():
